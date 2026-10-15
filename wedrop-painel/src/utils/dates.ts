@@ -14,8 +14,27 @@ const dayFormatter = new Intl.DateTimeFormat('en-CA', {
 
 const RAW_DATE_PATTERN = /^(\d{2})[/-](\d{2})[/-](\d{4})/;
 
+const clockFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: APP_TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
 export function dayKeyFromDate(date: Date): string {
   return dayFormatter.format(date);
+}
+
+/** Hora de São Paulo no formato HH:MM. */
+export function clockLabel(date: Date): string {
+  return clockFormatter.format(date);
+}
+
+/** Minutos desde 00:00 em São Paulo; null se a data for inválida. */
+export function minutesOfDaySP(date: Date): number | null {
+  if (Number.isNaN(date.getTime())) return null;
+  const [hour, minute] = clockFormatter.format(date).split(':').map(Number);
+  return hour * 60 + minute;
 }
 
 export function todayKey(): string {

@@ -34,7 +34,7 @@ from .config import (
 )
 from .logs import configure_progress_logging, log_progress
 from .scraping.browser import open_browser
-from .scraping.catalog import Category, ListingError, filter_categories, list_categories, read_category_links
+from .scraping.catalog import Category, ListedProduct, ListingError, filter_categories, list_categories, read_category_listing
 from .scraping.product_page import ProductJob, ProductReader
 from .scraping.session import SessionExpiredError, ensure_authenticated
 from .storage import products_file
@@ -252,16 +252,16 @@ class _ProductCrawler:
         )
 
 
-async def _read_listing(page: Page, category: Category, summary: MappingSummary) -> dict[str, str]:
+async def _read_listing(page: Page, category: Category, summary: MappingSummary) -> dict[str, ListedProduct]:
     """Lista da categoria. Se faltar produto em relação ao site, avisa e registra a divergência."""
-    links = await read_category_links(page, category)
-    if category.count is not None and len(links) < category.count:
+    listing = await read_category_listing(page, category)
+    if category.count is not None and len(listing) < category.count:
         log_progress(
             f"AVISO: o site informa {category.count} produtos em {category.name}, "
-            f"mas a listagem trouxe {len(links)}."
+            f"mas a listagem trouxe {len(listing)}."
         )
         summary.shortfall_categories.append(category.name)
-    return links
+    return listing
 
 
 def _prepare_products_file(paths: DataPaths, options: MappingOptions, state) -> bool:
@@ -351,8 +351,8 @@ async def _map_catalog(
         log_progress(f"[{index}/{len(categories)}] Lendo listagem da categoria {category.name}...")
         links = await _read_listing(listing_page, category, summary)
         pending = [
-            ProductJob(product_id, url, category.name)
-            for product_id, url in links.items()
+            ProductJob(product_id, item.url, category.name)
+            for product_id, item in links.items()
             if product_id not in saved_ids
         ]
         if remaining is not None:
@@ -532,25 +532,35 @@ async def _refresh_category(
 
     log_progress(f"{label}: categoria inteira ({reason}).")
     summary.full_categories.append(category.name)
-    links = await _read_listing(listing_page, category, summary)
+    listing = await _read_listing(listing_page, category, summary)
     known_by_id = {str(record["product_id"]): record for record in known}
+    # Esgotado com selo Indisponível na listagem não é aberto: a página não traria nada novo.
+    # Esgotado com selo Disponível (voltou ao estoque) ou sem selo é lido como os demais.
+    skipped = [
+        product_id
+        for product_id, item in listing.items()
+        if product_id in known_by_id and _is_sold_out(known_by_id[product_id]) and item.status == INACTIVE
+    ]
+    skipped_set = set(skipped)
     listed_jobs = [
         _balance_job(known_by_id[product_id], category)
         if product_id in known_by_id
-        else ProductJob(product_id, url, category.name)
-        for product_id, url in links.items()
+        else ProductJob(product_id, item.url, category.name)
+        for product_id, item in listing.items()
+        if product_id not in skipped_set
     ]
-    new_count = sum(1 for product_id in links if product_id not in known_by_id)
+    new_count = sum(1 for product_id in listing if product_id not in known_by_id)
     # Produto que acabou de sair da listagem esgotou: a página dele mostra as últimas
     # vendas no histórico e o selo Indisponível. Continua salvo e é lido por inteiro uma
     # vez; quem já estava esgotado não é relido. Esgotado que voltou à listagem é comparado.
     gone = [
         record
         for product_id, record in known_by_id.items()
-        if product_id not in links and not _is_sold_out(record)
+        if product_id not in listing and not _is_sold_out(record)
     ]
     log_progress(
-        f"Categoria {category.name}: {len(links)} listados ({new_count} novos); "
+        f"Categoria {category.name}: {len(listing)} listados ({new_count} novos, "
+        f"{len(skipped)} esgotados pulados pelo selo); "
         f"{len(gone)} acabaram de sair da listagem e serão lidos por inteiro."
     )
     failures = await crawler.crawl(listed_jobs)
@@ -564,7 +574,7 @@ async def _refresh_category(
     if failures or category.name in summary.shortfall_categories:
         log_progress(f"Categoria {category.name} não ficou completa; a próxima execução a lê de novo.")
         return
-    _save_category(repository, supabase, category, len(links), captured_at)
+    _save_category(repository, supabase, category, len(listing), captured_at)
 
 
 def _full_read_reason(category: Category, baselines: dict[str, int | None], stored_count: int) -> str | None:

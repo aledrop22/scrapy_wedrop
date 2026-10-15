@@ -163,6 +163,11 @@ export const DailyDecisionDashboard: React.FC<DailyDecisionDashboardProps> = ({
             <p className="text-xs text-muted mt-0.5 max-w-2xl">
               Comparativo automatizado de faturamento, novos lotes de estoque, produtos reativados e variação de preço para sua loja.
             </p>
+            {decisionData.cutoffLabel && (
+              <p className="text-[11px] font-semibold text-accent mt-1">
+                Hoje até {decisionData.cutoffLabel} × ontem até o mesmo horário
+              </p>
+            )}
           </div>
 
           {/* Quick Metrics KPI Cards */}
@@ -288,6 +293,19 @@ export const DailyDecisionDashboard: React.FC<DailyDecisionDashboardProps> = ({
             );
           })}
         </div>
+
+        {/* O total de hoje inclui as categorias fora do pódio; sem esta linha, o pódio não soma o total */}
+        {(() => {
+          const others = categoryRanking.slice(3).filter((c) => c.salesToday > 0);
+          const othersUnits = others.reduce((acc, c) => acc + c.salesToday, 0);
+          if (others.length === 0) return null;
+          return (
+            <p className="text-[11px] text-muted">
+              Demais {others.length} {others.length === 1 ? 'categoria' : 'categorias'} com venda: {formatInt(othersUnits)} un.
+              {' · '}Total de hoje: {formatInt(totals24h.totalSoldToday)} un.
+            </p>
+          );
+        })()}
 
         {/* Top 3 Comparison Bar Chart */}
         <div className="pt-2">

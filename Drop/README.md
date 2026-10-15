@@ -33,7 +33,8 @@ Credenciais ficam no `.env` (`WEDROP_EMAIL`, `WEDROP_PASSWORD`, `SUPABASE_URL`, 
   - Aumentou: produto novo (na listagem e ainda não salvo) é lido por inteiro.
   - Diminuiu: produto que acabou de sair da listagem esgotou. A página dele é lida por inteiro uma vez (últimas vendas no histórico e selo Indisponível), e ele continua salvo.
   - Produto que continua na listagem: mesma comparação de preço e saldo com o dia anterior.
-- Produto já esgotado (Indisponível) não é relido. Quando volta a ter saldo, volta à listagem, a quantidade da categoria sobe e ele é atualizado.
+  - Produto esgotado que a listagem mostra com selo **Indisponível** não é aberto (pulado). Quem está salvo como esgotado mas voltou ao selo **Disponível** é comparado e lido.
+- Produto já esgotado (Indisponível) não é relido. A quantidade do site conta os esgotados, então a reposição só é vista quando a categoria é lida por inteiro.
 - Se uma leitura de preço e saldo falhar, a categoria inteira é lida.
 
 A coleta manual (`coletar`) continua completa.

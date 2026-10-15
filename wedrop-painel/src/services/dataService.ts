@@ -20,7 +20,7 @@ import {
   getPastDate,
   parsePriceNumber,
 } from '../utils/status';
-import { APP_TIME_ZONE, eventDayKey, daysBetween, dayKeyFromDate } from '../utils/dates';
+import { APP_TIME_ZONE, clockLabel, eventDayKey, daysBetween, dayKeyFromDate, minutesOfDaySP } from '../utils/dates';
 
 const SNAPSHOT_URL = '/api/snapshot';
 
@@ -42,6 +42,8 @@ export interface PriceAlertRow {
 }
 
 export interface Decision24hData {
+  /** Hora da última coleta (HH:MM, São Paulo): hoje vai até aqui e ontem até o mesmo horário. */
+  cutoffLabel: string | null;
   top20Products: Product24hStats[];
   priceAlerts: PriceAlertRow[];
   topCategories24h: Category24hComparison[];
@@ -180,6 +182,19 @@ class DataService {
     const todayStr = getLocalDateString();
     const yesterdayStr = getPastDate(1);
 
+    // Hoje ainda está em andamento: a leitura vai até a última coleta. Ontem entra só até o
+    // mesmo horário; senão a comparação põe um dia parcial contra um dia inteiro.
+    const cutoffIso = this.getLastCollectionAt();
+    const cutoffDate = cutoffIso ? new Date(cutoffIso) : null;
+    const cutoffMinutes = cutoffDate ? minutesOfDaySP(cutoffDate) : null;
+    const cutoffLabel = cutoffDate && cutoffMinutes !== null ? clockLabel(cutoffDate) : null;
+    const withinCutoff = (evt: DatedStockEvent): boolean => {
+      if (cutoffMinutes === null) return true;
+      // Movimentação sem hora (só a data do texto do site) conta no dia inteiro
+      const eventMinutes = evt.event_at ? minutesOfDaySP(new Date(evt.event_at)) : null;
+      return eventMinutes === null || eventMinutes <= cutoffMinutes;
+    };
+
     // Map sales & restocks for today and yesterday
     const todaySales = new Map<string, number>();
     const todayRestock = new Map<string, number>();
@@ -187,6 +202,7 @@ class DataService {
     const yestRestock = new Map<string, number>();
 
     for (const evt of this.stockEvents) {
+      if (!withinCutoff(evt)) continue;
       if (evt.day === todayStr) {
         if (evt.event_kind === 'sale') {
           todaySales.set(evt.product_id, (todaySales.get(evt.product_id) || 0) + evt.quantity);
@@ -377,6 +393,7 @@ class DataService {
     priceAlerts.sort((a, b) => Date.parse(b.changedAt) - Date.parse(a.changedAt));
 
     return {
+      cutoffLabel,
       top20Products,
       priceAlerts,
       topCategories24h: categories24hList,

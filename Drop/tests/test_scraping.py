@@ -2,7 +2,14 @@
 
 import unittest
 
-from wedrop.scraping.catalog import Category, filter_categories, parse_pagination
+from wedrop.scraping.catalog import (
+    Category,
+    ListedProduct,
+    _merge_listed,
+    filter_categories,
+    listing_status,
+    parse_pagination,
+)
 from wedrop.scraping.parsing import (
     calculate_current_balance,
     parse_first_int,
@@ -52,6 +59,27 @@ class ParsingTests(unittest.TestCase):
     def test_balance_ignores_signed_numbers_as_initial_balance(self):
         history = [{"type": "Ajuste", "quantity": "- 4"}, {"type": "ENTRADA", "quantity": "+ 2"}]
         self.assertEqual(calculate_current_balance(history), 2)
+
+
+class ListingStatusTests(unittest.TestCase):
+    def test_card_status_is_the_first_line_badge(self):
+        self.assertEqual(listing_status("DISPONÍVEL\n\nRosa Artificial\n\nR$ 1,99"), "Ativo")
+        self.assertEqual(listing_status("INDISPONÍVEL\n\nRosa Artificial"), "Inativo")
+        self.assertEqual(listing_status("  \nIndisponível\nNome"), "Inativo")
+        # Card com etiqueta VÍDEO antes do selo
+        self.assertEqual(listing_status("VÍDEO\nDISPONÍVEL\n\nÁrvore de Natal\n\nR$ 309,99"), "Ativo")
+
+    def test_card_without_badge_has_no_status(self):
+        self.assertEqual(listing_status(""), "")
+        self.assertEqual(listing_status("Rosa indisponível em estoque\nR$ 1,99"), "")
+        self.assertEqual(listing_status("VÍDEO\n\nNome\n\nDISPONÍVEL depois"), "")
+
+    def test_merge_keeps_a_badge_read_earlier_when_a_later_capture_is_empty(self):
+        target = {"1": ListedProduct("https://x/catalog/1", "Inativo")}
+        _merge_listed(target, {"1": ListedProduct("https://x/catalog/1", "")})
+        self.assertEqual(target["1"].status, "Inativo")
+        _merge_listed(target, {"2": ListedProduct("https://x/catalog/2", "")})
+        self.assertEqual(target["2"].status, "")
 
 
 class CategoryFilterTests(unittest.TestCase):

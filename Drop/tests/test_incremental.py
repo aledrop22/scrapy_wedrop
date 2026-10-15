@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from wedrop.mapping import MappingSummary, _full_read_reason, _ProductCrawler, _ProductsJsonFile, _refresh_category
-from wedrop.scraping.catalog import Category
+from wedrop.scraping.catalog import Category, ListedProduct
 from wedrop.scraping.product_page import ProductJob
 from wedrop.scraping.product_record import (
     PRICE_CHANGED,
@@ -22,6 +22,10 @@ from wedrop.storage import products_file
 from wedrop.storage.sqlite_repository import SalesRepository
 
 COZINHA = Category("Cozinha", "https://x/cozinha", 1276)
+
+
+def _listed(product_id: str, status: str = "Ativo") -> ListedProduct:
+    return ListedProduct(f"https://x/catalog/{product_id}", status)
 
 
 class ReadDecisionTests(unittest.TestCase):
@@ -223,7 +227,7 @@ class RefreshCategoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_changed_category_reads_new_and_sold_out_products_in_full_and_keeps_them(self):
         # Produto 2 saiu da listagem (acabou o estoque); produto 9 entrou.
-        listing = {"1": "https://x/catalog/1", "9": "https://x/catalog/9"}
+        listing = {"1": _listed("1"), "9": _listed("9")}
         summary, crawler = await self._refresh(count=2, baseline=1, listing=listing)
 
         self.assertEqual(summary.full_categories, ["Cozinha"])
@@ -237,8 +241,9 @@ class RefreshCategoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored_ids, ["1", "2", "4"])
         self.assertEqual(self.repository.category_baselines(), {"Cozinha": 2})
 
-    async def test_sold_out_product_back_in_listing_is_compared_again(self):
-        listing = {"1": "https://x/catalog/1", "2": "https://x/catalog/2", "4": "https://x/catalog/4"}
+    async def test_sold_out_product_whose_badge_says_available_is_read_again(self):
+        # Voltou ao estoque: a listagem mostra Disponível, então é comparado e lido
+        listing = {"1": _listed("1"), "2": _listed("2"), "4": _listed("4", "Ativo")}
         _, crawler = await self._refresh(count=3, baseline=2, listing=listing)
 
         listed, gone = crawler.calls
@@ -246,15 +251,33 @@ class RefreshCategoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(listed[2].known_record)
         self.assertEqual(gone, [])
 
+    async def test_sold_out_product_with_sold_out_badge_is_not_opened_on_count_change(self):
+        # Quantidade mudou, mas o produto 4 segue Indisponível na listagem: não é aberto
+        listing = {"1": _listed("1"), "2": _listed("2"), "4": _listed("4", "Inativo"), "9": _listed("9")}
+        summary, crawler = await self._refresh(count=4, baseline=2, listing=listing)
+
+        self.assertEqual(summary.full_categories, ["Cozinha"])
+        listed, gone = crawler.calls
+        self.assertEqual([job.product_id for job in listed], ["1", "2", "9"])
+        self.assertEqual(gone, [])
+        self.assertIn("4", [record["product_id"] for record in self.products_json.by_category()["Cozinha"]])
+        self.assertEqual(self.repository.category_baselines(), {"Cozinha": 4})
+
+    async def test_sold_out_product_without_badge_is_read_to_be_safe(self):
+        listing = {"1": _listed("1"), "2": _listed("2"), "4": _listed("4", "")}
+        _, crawler = await self._refresh(count=3, baseline=2, listing=listing)
+
+        self.assertEqual([job.product_id for job in crawler.calls[0]], ["1", "2", "4"])
+
     async def test_sold_out_product_that_fails_to_open_does_not_block_the_category(self):
-        listing = {"1": "https://x/catalog/1"}
+        listing = {"1": _listed("1")}
         summary, _ = await self._refresh(count=1, baseline=2, listing=listing, failures_per_call=[set(), {"2"}])
 
         self.assertEqual(summary.failed_ids, [])
         self.assertEqual(self.repository.category_baselines(), {"Cozinha": 1})
 
     async def test_failed_balance_read_is_retried_only_for_failed_products(self):
-        listing = {"1": "https://x/catalog/1", "2": "https://x/catalog/2"}
+        listing = {"1": _listed("1"), "2": _listed("2")}
         summary, crawler = await self._refresh(
             count=2, baseline=2, listing=listing, failures_per_call=[{"2"}, set()]
         )
@@ -269,7 +292,7 @@ class RefreshCategoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.repository.category_baselines(), {"Cozinha": 2})
 
     async def test_incomplete_listing_keeps_old_baseline_so_next_run_reads_again(self):
-        listing = {"1": "https://x/catalog/1"}
+        listing = {"1": _listed("1")}
         summary, _ = await self._refresh(count=2, baseline=1, listing=listing, shortfall=True)
 
         self.assertEqual(summary.full_categories, ["Cozinha"])

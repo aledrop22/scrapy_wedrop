@@ -15,6 +15,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from ..config import BASE_URL, PRODUCTS_PER_PAGE
 from ..logs import log_progress
+from ..storage.product_status import status_from_availability
 from .parsing import parse_first_int, product_id_from_url
 
 CATEGORY_SELECTOR = 'a[draggable="false"][data-group=""]'
@@ -43,6 +44,31 @@ class Category:
 
 class ListingError(RuntimeError):
     """A listagem não pôde ser lida com segurança."""
+
+
+@dataclass(frozen=True)
+class ListedProduct:
+    """Produto da listagem: endereço e o selo do card ("Ativo", "Inativo" ou "" sem selo)."""
+
+    url: str
+    status: str = ""
+
+
+def listing_status(card_text: str) -> str:
+    """Selo do card: uma linha inteira "DISPONÍVEL" ou "INDISPONÍVEL" no topo (antes pode haver a etiqueta VÍDEO)."""
+    top_lines = [line.strip() for line in card_text.splitlines() if line.strip()][:3]
+    for line in top_lines:
+        status = status_from_availability(line)
+        if status:
+            return status
+    return ""
+
+
+def _merge_listed(target: dict[str, ListedProduct], incoming: dict[str, ListedProduct]) -> None:
+    """Junta capturas da listagem. Uma captura sem selo não apaga o selo já lido."""
+    for product_id, item in incoming.items():
+        if product_id not in target or item.status:
+            target[product_id] = item
 
 
 def filter_categories(categories: list[Category], needle: str | None) -> list[Category]:
@@ -111,13 +137,19 @@ async def _category_count(link) -> int | None:
 
 async def read_category_links(page: Page, category: Category) -> dict[str, str]:
     """Todos os produtos da categoria, como {product_id: url}."""
+    listing = await read_category_listing(page, category)
+    return {product_id: item.url for product_id, item in listing.items()}
+
+
+async def read_category_listing(page: Page, category: Category) -> dict[str, ListedProduct]:
+    """Todos os produtos da categoria, como {product_id: ListedProduct} (com o selo de cada card)."""
     await page.goto(category.url, wait_until="domcontentloaded")
     await page.wait_for_timeout(800)
     await _set_products_per_page(page, category.count)
 
-    links: dict[str, str] = {}
+    links: dict[str, ListedProduct] = {}
     for _ in range(MAX_LISTING_PAGES):
-        links.update(await _collect_visible_links(page))
+        _merge_listed(links, await _collect_visible_links(page))
         state = await pagination_state(page)
         if state is None:
             break
@@ -148,26 +180,26 @@ async def pagination_state(page: Page) -> tuple[int, int] | None:
     return parse_pagination(await page.locator("body").inner_text())
 
 
-async def _links_on_page(page: Page) -> dict[str, str]:
-    hrefs = await page.locator('a[href*="/catalog/"]').evaluate_all(
-        "(anchors) => anchors.map((anchor) => anchor.href)"
+async def _links_on_page(page: Page) -> dict[str, ListedProduct]:
+    cards = await page.locator('a[href*="/catalog/"]').evaluate_all(
+        "(anchors) => anchors.map((anchor) => ({ href: anchor.href, text: anchor.innerText }))"
     )
-    links: dict[str, str] = {}
-    for href in hrefs:
-        product_id = product_id_from_url(href)
+    listed: dict[str, ListedProduct] = {}
+    for card in cards:
+        product_id = product_id_from_url(card["href"])
         if product_id:
-            links.setdefault(product_id, href)
-    return links
+            _merge_listed(listed, {product_id: ListedProduct(card["href"], listing_status(card["text"] or ""))})
+    return listed
 
 
-async def _collect_visible_links(page: Page) -> dict[str, str]:
+async def _collect_visible_links(page: Page) -> dict[str, ListedProduct]:
     """Rola a listagem até parar de aparecer produto novo (a lista carrega sob demanda)."""
-    links: dict[str, str] = {}
+    links: dict[str, ListedProduct] = {}
     previous_count = -1
     unchanged_rounds = 0
     for _ in range(30):
         current = await _links_on_page(page)
-        links.update(current)
+        _merge_listed(links, current)
         if len(current) == previous_count:
             unchanged_rounds += 1
             if unchanged_rounds >= 2:
