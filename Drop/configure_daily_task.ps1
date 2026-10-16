@@ -26,7 +26,7 @@ $principal = New-ScheduledTaskPrincipal `
 $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -WakeToRun `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 4) `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -MultipleInstances IgnoreNew
 
 Register-ScheduledTask `

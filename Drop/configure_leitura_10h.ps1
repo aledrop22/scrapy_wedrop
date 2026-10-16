@@ -21,7 +21,7 @@ $principal = New-ScheduledTaskPrincipal `
     -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 3) `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -MultipleInstances IgnoreNew
 
 Register-ScheduledTask `
@@ -30,7 +30,8 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Principal $principal `
     -Settings $settings `
-    -Description "Segunda leitura incremental do catálogo WeDrop às 10h (limite de 3 horas)." `
+    -Description "Segunda leitura incremental do catálogo WeDrop às 10h, sem limite de tempo." `
     -Force | Out-Null
 
-Write-Output "Tarefa '$taskName' registrada para executar diariamente às 10h, com limite de 3 horas."
+Write-Output "Tarefa '$taskName' registrada para executar diariamente às 10h, sem limite de tempo."
+Write-Output "Se a rotina da meia-noite ainda estiver rodando, esta não começa (trava de execução)."

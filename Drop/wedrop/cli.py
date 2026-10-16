@@ -7,7 +7,8 @@ import asyncio
 import sys
 from pathlib import Path
 
-from .logs import log_progress
+from .logs import configure_progress_logging, log_progress
+from .lock import CollectionLockedError, collection_lock
 from .mapping import DataPaths, MappingOptions, run_mapping
 from .protection import DEFAULT_ATTEMPTS, DEFAULT_PAUSE_SECONDS, run_daily
 from .config import DEFAULT_WORKERS
@@ -46,17 +47,23 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     paths = _paths(args.pasta_dados)
     try:
-        if args.command == "coletar":
-            options = MappingOptions(
-                category_filter=args.categoria,
-                product_limit=args.limite,
-                local_only=args.local,
-                workers=args.workers,
-            )
-            summary = asyncio.run(run_mapping(options, paths))
-            return 0 if summary.is_complete or summary.partial else 1
-        completed = asyncio.run(run_daily(args.tentativas, args.pausa, paths))
-        return 0 if completed else 1
+        with collection_lock():
+            if args.command == "coletar":
+                options = MappingOptions(
+                    category_filter=args.categoria,
+                    product_limit=args.limite,
+                    local_only=args.local,
+                    workers=args.workers,
+                )
+                summary = asyncio.run(run_mapping(options, paths))
+                return 0 if summary.is_complete or summary.partial else 1
+            completed = asyncio.run(run_daily(args.tentativas, args.pausa, paths))
+            return 0 if completed else 1
+    except CollectionLockedError as exc:
+        # Ex.: a rotina das 00:00 ainda rodando quando a das 10:00 começa. Não grava nada.
+        configure_progress_logging()
+        log_progress(f"{exc} Esta execução não começou.")
+        return 2
     except KeyboardInterrupt:
         log_progress("Interrompido pelo usuário. O progresso já gravado foi preservado.")
         return 130
