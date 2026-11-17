@@ -118,47 +118,69 @@ class DataService {
   }
 
   private async fetchSnapshot(): Promise<boolean> {
-    try {
-      const response = await fetch(SNAPSHOT_URL, { cache: 'no-store' });
-      const body = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(body?.error || `HTTP ${response.status}`);
-      }
-      const snapshot = body as SnapshotResponse;
-      if (!snapshot || !Array.isArray(snapshot.categories) || !Array.isArray(snapshot.products)) {
-        // Ex.: rodando só o Vite, sem a função /api/snapshot, a resposta é a página HTML
-        throw new Error('a função /api/snapshot não respondeu com os dados (verifique o deploy da Vercel)');
-      }
-      this.categories = snapshot.categories;
-      this.products = snapshot.products;
-      this.stockEvents = snapshot.stock_events.flatMap((evt) => {
-        const day = eventDayKey(evt.event_at, evt.event_at_raw);
-        return day ? [{ ...evt, day }] : [];
-      });
-      this.stockSnapshots = snapshot.stock_snapshots;
+    const MAX_RETRIES = 3;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const response = await fetch(SNAPSHOT_URL, { cache: 'no-store' });
+        const body = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(body?.error || `HTTP ${response.status}`);
+        }
+        const snapshot = body as SnapshotResponse;
+        if (!snapshot || !Array.isArray(snapshot.categories) || !Array.isArray(snapshot.products)) {
+          // Ex.: rodando só o Vite, sem a função /api/snapshot, a resposta é a página HTML
+          throw new Error('a função /api/snapshot não respondeu com os dados (verifique o deploy da Vercel)');
+        }
+        this.categories = snapshot.categories;
+        this.products = snapshot.products;
+        this.stockEvents = snapshot.stock_events.flatMap((evt) => {
+          const day = eventDayKey(evt.event_at, evt.event_at_raw);
+          return day ? [{ ...evt, day }] : [];
+        });
+        this.stockSnapshots = snapshot.stock_snapshots;
 
-      const readAt = new Date(snapshot.fetched_at).toLocaleTimeString('pt-BR', {
-        timeZone: APP_TIME_ZONE,
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      });
-      this.config = {
-        lastFetchedAt: readAt,
-        isConnected: true,
-        statusMessage: `Fonte: Supabase (lido às ${readAt})`,
-      };
-      return true;
-    } catch (err: unknown) {
-      console.error('Falha ao ler o Supabase pelo /api/snapshot', err);
-      const msg = err instanceof Error ? err.message : 'Erro desconhecido';
-      this.config = {
-        ...this.config,
-        isConnected: false,
-        statusMessage: `Não foi possível ler os dados: ${msg}`,
-      };
-      return false;
+        const readAt = new Date(snapshot.fetched_at).toLocaleTimeString('pt-BR', {
+          timeZone: APP_TIME_ZONE,
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        });
+        this.config = {
+          lastFetchedAt: readAt,
+          isConnected: true,
+          statusMessage: `Fonte: Supabase (lido às ${readAt})`,
+        };
+        return true;
+      } catch (err: unknown) {
+        lastError = err instanceof Error ? err : new Error('Erro desconhecido');
+        console.error(`Tentativa ${attempt + 1}/${MAX_RETRIES} falhou:`, lastError);
+        
+        // Só faz retry se for erro de rede ou timeout (não se for erro HTTP)
+        const shouldRetry = lastError.message.includes('HTTP') === false || 
+                          lastError.message.includes('504') || 
+                          lastError.message.includes('502') ||
+                          lastError.message.includes('503');
+        
+        if (!shouldRetry || attempt === MAX_RETRIES - 1) {
+          break;
+        }
+        
+        // Exponential backoff: 1s, 2s, 4s
+        const delay = Math.pow(2, attempt) * 1000;
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
     }
+    
+    // Todas as tentativas falharam
+    const msg = lastError ? lastError.message : 'Erro desconhecido';
+    this.config = {
+      ...this.config,
+      isConnected: false,
+      statusMessage: `Não foi possível ler os dados: ${msg} (após ${MAX_RETRIES} tentativas)`,
+    };
+    return false;
   }
 
   /**
