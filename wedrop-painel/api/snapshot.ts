@@ -4,7 +4,7 @@
  * A leitura é paginada igual ao SupabaseRepository.fetch_snapshot do Streamlit (Drop/wedrop).
  */
 
-const FETCH_PAGE_SIZE = 500; // Reduzido para evitar timeouts
+const FETCH_PAGE_SIZE = 200; // Reduzido para evitar timeouts e melhorar performance
 const REQUEST_TIMEOUT_MS = 15000; // 15 segundos por requisição
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000; // 1 segundo base para backoff
